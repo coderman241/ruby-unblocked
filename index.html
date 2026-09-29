@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Files</title>
+<style>
+:root{
+  --bg:#e8ebee; --panel:#f7f8f9; --ink:#17212b; --mute:#5d6b79; --line:#c9d0d7; --accent:#2b56e8; --sel:#dbe3fb;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace; --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#12171d; --panel:#1a2129; --ink:#e4e9ee; --mute:#8b98a6; --line:#2c3641; --accent:#7f9dff; --sel:#243256}
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans);display:flex}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* sidebar */
+aside{width:300px;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;height:100%}
+aside header{padding:16px 16px 10px}
+aside h1{font-size:17px;margin:0 0 10px;letter-spacing:-.01em}
+#q{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+#tree{flex:1;overflow:auto;padding:4px 8px 16px;font-size:14px}
+#tree details{margin-left:12px}
+#tree summary{cursor:pointer;padding:3px 6px;color:var(--mute);border-radius:4px;list-style:none}
+#tree summary::before{content:"▸ ";display:inline-block;width:1em}
+#tree details[open]>summary::before{content:"▾ "}
+#tree .f{display:block;padding:3px 6px 3px 22px;margin-left:12px;color:var(--ink);text-decoration:none;border-radius:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#tree>.f{margin-left:0}
+#tree .f:hover,#tree summary:hover{background:var(--sel)}
+#tree .f.on{background:var(--sel);color:var(--accent);font-weight:600}
+.status{padding:12px 16px;color:var(--mute);font-size:13px}
+
+/* viewer */
+main{flex:1;min-width:0;display:flex;flex-direction:column;height:100%}
+#bar{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+#bar .path{font-family:var(--mono);font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#bar a,#menu{font-size:13px;padding:4px 10px;border:1px solid var(--line);border-radius:6px;text-decoration:none;background:var(--bg);color:var(--ink);font-family:inherit;cursor:pointer}
+#menu{display:none}
+#view{flex:1;overflow:auto;position:relative}
+#view>iframe{width:100%;height:100%;border:0;background:#fff;display:block}
+.pad{padding:24px;max-width:900px;margin:0 auto}
+.center{height:100%;display:grid;place-items:center;padding:16px}
+.center img,.center video{max-width:100%;max-height:100%}
+pre{margin:0;padding:20px;font:13px/1.55 var(--mono);white-space:pre;overflow:auto;tab-size:2}
+.md{line-height:1.7}
+.md img{max-width:100%}
+.md pre{background:var(--panel);border:1px solid var(--line);border-radius:6px}
+.md code{font-family:var(--mono);font-size:.9em}
+.md table,.tbl{border-collapse:collapse}
+.md td,.md th,.tbl td,.tbl th{border:1px solid var(--line);padding:5px 10px;text-align:left}
+.tbl th{background:var(--panel);position:sticky;top:0}
+.empty{color:var(--mute);text-align:center}
+.empty h2{color:var(--ink);margin:0 0 6px}
+
+@media (max-width:760px){
+  aside{position:fixed;inset:0 auto 0 0;z-index:5;transform:translateX(-100%);transition:transform .2s;width:min(320px,86vw)}
+  body.nav aside{transform:none}
+  #menu{display:inline-block}
+}
+@media (prefers-reduced-motion:reduce){aside{transition:none}}
+</style>
+</head>
+<body>
+
+<aside>
+  <header>
+    <h1 id="title">Files</h1>
+    <input id="q" type="search" placeholder="Filter files" aria-label="Filter files">
+  </header>
+  <nav id="tree" aria-label="Files"></nav>
+</aside>
+
+<main>
+  <div id="bar">
+    <button id="menu" aria-label="Show files">Files</button>
+    <span class="path" id="path"></span>
+    <a id="raw" href="#" target="_blank" rel="noopener" hidden>Open raw</a>
+  </div>
+  <div id="view">
+    <div class="center empty"><div><h2>Pick a file</h2>Choose anything from the list. Pages, images, video, audio, PDFs, Markdown, code and data open right here.</div></div>
+  </div>
+</main>
+
+<script>
+/* ---------- CONFIG (all optional; leave blank to auto-detect) ---------- */
+const CONFIG = {
+  title:  "",          // sidebar heading; defaults to the repo name
+  owner:  "",          // GitHub username, e.g. "octocat"
+  repo:   "",          // repository name
+  branch: "",          // defaults to the repo's default branch
+  base:   "",          // only files under this folder are listed, e.g. "docs"
+  hide:   [/^\.git/, /^\.github\//, /^index\.html$/, /^files\.json$/, /^\.nojekyll$/, /^CNAME$/],
+  open:   ""           // file to open on first load, e.g. "README.md"
+};
+/* ------------------------------------------------------------------------ */
+
+const $ = s => document.querySelector(s);
+const tree = $('#tree'), view = $('#view');
+let files = [];
+
+const EXT = {
+  html:'page', htm:'page', svg:'image', png:'image', jpg:'image', jpeg:'image', gif:'image', webp:'image', avif:'image', ico:'image', bmp:'image',
+  mp4:'video', webm:'video', mov:'video', m4v:'video', ogv:'video',
+  mp3:'audio', wav:'audio', ogg:'audio', m4a:'audio', flac:'audio', aac:'audio',
+  pdf:'pdf', md:'md', markdown:'md', csv:'csv', tsv:'csv', json:'json',
+  txt:'text', log:'text', xml:'text', yml:'text', yaml:'text', toml:'text', ini:'text', css:'text', js:'text', mjs:'text', ts:'text', tsx:'text', jsx:'text',
+  py:'text', rb:'text', go:'text', rs:'text', java:'text', c:'text', h:'text', cpp:'text', cs:'text', php:'text', sh:'text', bat:'text', sql:'text', lua:'text', swift:'text', kt:'text', r:'text', ipynb:'text'
+};
+const kind = p => { const e = p.split('.').pop().toLowerCase(); return EXT[e] || (p.includes('.') ? 'other' : 'text'); };
+const url = p => p.split('/').map(encodeURIComponent).join('/');
+const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---------- load the file list ---------- */
+async function detect(){
+  let {owner, repo, branch} = CONFIG;
+  const host = location.hostname;
+  if (!owner && host.endsWith('.github.io')){
+    owner = host.split('.')[0];
+    repo = repo || location.pathname.split('/')[1] || host;
+  }
+  return {owner, repo, branch};
+}
+
+async function loadFiles(){
+  // 1) manifest wins if present (works locally and on custom domains)
+  try{
+    const m = await fetch('files.json', {cache:'no-cache'});
+    if (m.ok){ const j = await m.json(); return j.map(x => typeof x === 'string' ? x : x.path); }
+  }catch(e){}
+  // 2) GitHub API
+  const {owner, repo, branch} = await detect();
+  if (!owner || !repo) throw new Error('Could not work out the repo. Set owner and repo in CONFIG, or add a files.json.');
+  let br = branch;
+  if (!br){
+    const r = await fetch(`https://api.github.com/repos/${owner}/${repo}`);
+    if (!r.ok) throw new Error(`GitHub API returned ${r.status}. The repo must be public, and the API allows 60 requests an hour per visitor.`);
+    br = (await r.json()).default_branch;
+  }
+  const t = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${br}?recursive=1`);
+  if (!t.ok) throw new Error(`GitHub API returned ${t.status} while listing files.`);
+  return (await t.json()).tree.filter(n => n.type === 'blob').map(n => n.path);
+}
+
+function clean(list){
+  const base = CONFIG.base ? CONFIG.base.replace(/\/?$/, '/') : '';
+  return list.filter(p => p.startsWith(base))
+             .filter(p => !CONFIG.hide.some(h => h.test(p)))
+             .sort((a,b) => a.localeCompare(b, undefined, {numeric:true}));
+}
+
+/* ---------- sidebar ---------- */
+function render(filter=''){
+  const f = filter.toLowerCase();
+  const list = files.filter(p => p.toLowerCase().includes(f));
+  const root = {};
+  list.forEach(p => {
+    const parts = p.split('/'); let n = root;
+    parts.forEach((part,i) => { if (i === parts.length-1) (n.__files ||= []).push(p); else n = (n[part] ||= {}); });
+  });
+  const cur = decodeURIComponent(location.hash.slice(1));
+  const walk = (n, top) => {
+    let h = '';
+    Object.keys(n).filter(k => k !== '__files').forEach(k => {
+      h += `<details${f ? ' open' : ''}><summary>${esc(k)}</summary>${walk(n[k])}</details>`;
+    });
+    (n.__files||[]).forEach(p => h += `<a class="f${p===cur?' on':''}" href="#${encodeURIComponent(p)}" title="${esc(p)}">${esc(p.split('/').pop())}</a>`);
+    return h;
+  };
+  tree.innerHTML = list.length ? walk(root, true) : '<div class="status">No matching files.</div>';
+  tree.querySelectorAll('.on').forEach(a => { for (let d = a.parentElement; d && d !== tree; d = d.parentElement) if (d.tagName === 'DETAILS') d.open = true; });
+}
+
+/* ---------- viewer ---------- */
+async function show(path){
+  document.body.classList.remove('nav');
+  $('#path').textContent = path;
+  const raw = $('#raw'); raw.hidden = false; raw.href = url(path);
+  document.title = path.split('/').pop();
+  tree.querySelectorAll('.f').forEach(a => a.classList.toggle('on', decodeURIComponent(a.getAttribute('href').slice(1)) === path));
+  const k = kind(path), u = url(path);
+  view.scrollTop = 0;
+
+  if (k === 'page') return view.innerHTML = `<iframe src="${u}" title="${esc(path)}"></iframe>`;
+  if (k === 'pdf')  return view.innerHTML = `<iframe src="${u}" title="${esc(path)}"></iframe>`;
+  if (k === 'image')return view.innerHTML = `<div class="center"><img src="${u}" alt="${esc(path)}"></div>`;
+  if (k === 'video')return view.innerHTML = `<div class="center"><video src="${u}" controls playsinline></video></div>`;
+  if (k === 'audio')return view.innerHTML = `<div class="center"><audio src="${u}" controls></audio></div>`;
+  if (k === 'other')return view.innerHTML = `<div class="center empty"><div><h2>No preview for this file type</h2><a href="${u}" download>Download ${esc(path.split('/').pop())}</a></div></div>`;
+
+  view.innerHTML = '<div class="status">Loading…</div>';
+  try{
+    const r = await fetch(u); if (!r.ok) throw new Error(r.status);
+    const txt = await r.text();
+    if (k === 'md'){
+      await lib('https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js', 'marked');
+      const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')+1) : '';
+      view.innerHTML = `<div class="pad md">${window.marked ? marked.parse(txt) : '<pre>'+esc(txt)+'</pre>'}</div>`;
+      view.querySelectorAll('.md img').forEach(i => { const s = i.getAttribute('src'); if (s && !/^(https?:|data:|\/)/.test(s)) i.src = url(dir + s); });
+    } else if (k === 'csv'){
+      const sep = path.endsWith('.tsv') ? '\t' : ',';
+      const rows = txt.trim().split(/\r?\n/).map(l => l.split(sep));
+      view.innerHTML = `<div class="pad" style="max-width:none"><table class="tbl"><thead><tr>${rows[0].map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rows.slice(1).map(r=>`<tr>${r.map(c=>`<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+    } else if (k === 'json'){
+      let out = txt; try{ out = JSON.stringify(JSON.parse(txt), null, 2); }catch(e){}
+      view.innerHTML = `<pre>${esc(out)}</pre>`;
+    } else view.innerHTML = `<pre>${esc(txt)}</pre>`;
+  }catch(e){ view.innerHTML = `<div class="center empty"><div><h2>Couldn't load this file</h2>${esc(String(e.message||e))}</div></div>`; }
+}
+
+function lib(src, name){
+  if (window[name]) return Promise.resolve();
+  return new Promise(res => { const s = document.createElement('script'); s.src = src; s.onload = s.onerror = res; document.head.appendChild(s); });
+}
+
+/* ---------- boot ---------- */
+function route(){
+  const p = decodeURIComponent(location.hash.slice(1));
+  if (p && files.includes(p)) show(p);
+}
+window.addEventListener('hashchange', route);
+$('#q').addEventListener('input', e => render(e.target.value));
+$('#menu').addEventListener('click', () => document.body.classList.toggle('nav'));
+
+(async () => {
+  tree.innerHTML = '<div class="status">Loading files…</div>';
+  const {repo} = await detect();
+  $('#title').textContent = CONFIG.title || repo || 'Files';
+  try{
+    files = clean(await loadFiles());
+    render();
+    if (location.hash) route();
+    else if (CONFIG.open && files.includes(CONFIG.open)) location.hash = encodeURIComponent(CONFIG.open);
+    else { const r = files.find(p => /^readme\.md$/i.test(p)); if (r) location.hash = encodeURIComponent(r); }
+  }catch(e){
+    tree.innerHTML = `<div class="status">${esc(e.message)}</div>`;
+  }
+})();
+</script>
+</body>
+</html>
